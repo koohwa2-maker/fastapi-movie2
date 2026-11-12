@@ -1,0 +1,13 @@
+{
+  "name": "fastapi-movie",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n back,front -c blue,magenta --kill-others \"npm:dev:back\" \"npm:dev:front\"",
+    "dev:back": "backend\\.venv\\Scripts\\python -m uvicorn main:app --app-dir backend --reload --reload-dir backend --port 8000",
+    "dev:front": "npm --prefix frontend run dev",
+    "setup": "python -m venv backend/.venv && backend\\.venv\\Scripts\\python -m pip install -r backend/requirements.txt && npm install && npm --prefix frontend install"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7"
+  }
+}

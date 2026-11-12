@@ -1,0 +1,72 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # GitHub 웹에서 수동 실행도 가능
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # 배포 전에 프론트 빌드가 되는지 먼저 확인 (실패하면 서버는 건드리지 않음)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend build check
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      # GitHub Secrets 로 backend/.env 생성 (키는 저장소에 커밋되지 않음)
+      - name: Create backend/.env
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          TMDB_READ_ACCESS_TOKEN: ${{ secrets.TMDB_READ_ACCESS_TOKEN }}
+        run: |
+          {
+            echo "TMDB_API_KEY=${TMDB_API_KEY}"
+            echo "TMDB_READ_ACCESS_TOKEN=${TMDB_READ_ACCESS_TOKEN}"
+            echo "TMDB_LANGUAGE=ko-KR"
+            echo "TMDB_REGION=KR"
+          } > backend/.env
+
+      - name: Set up SSH
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2.pem
+          chmod 600 ~/.ssh/ec2.pem
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload source to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude '.git' --exclude 'node_modules' --exclude '.venv' \
+            --exclude 'dist' --exclude '__pycache__' \
+            -e "ssh -i ~/.ssh/ec2.pem" \
+            ./ "$EC2_USER@$EC2_HOST:~/app/"
+
+      - name: Build & restart containers
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: ssh -i ~/.ssh/ec2.pem "$EC2_USER@$EC2_HOST" "bash ~/app/scripts/deploy.sh"
+
+      - name: Public health check
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: curl -fsS --retry 5 --retry-delay 3 "http://$EC2_HOST/api/health"
